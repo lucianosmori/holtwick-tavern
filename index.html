@@ -3,7 +3,27 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
-  <title>fiesta-poc-rpg-npc-dialog</title>
+  <title>Holtwick Tavern - browser RPG with local LLM NPCs</title>
+  <meta name="description" content="Holtwick Tavern is a tiny pixel-art frontier RPG that runs entirely in your browser. Walk around, chat with two NPCs powered by a local LLM (WebLLM + Qwen2.5). No server, no API keys." />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Holtwick Tavern" />
+  <meta property="og:locale" content="en_US" />
+  <meta property="og:title" content="Holtwick Tavern - browser RPG with local LLM NPCs" />
+  <meta property="og:description" content="Walk around a frontier pixel-art village and chat with two NPCs powered by a local LLM. Runs fully in your browser. No server, no API keys." />
+  <meta property="og:url" content="https://lucianosmori.github.io/holtwick-tavern/" />
+  <meta property="og:image" content="https://lucianosmori.github.io/holtwick-tavern/assets/preview.png?v=1" />
+  <meta property="og:image:type" content="image/png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Pixel-art screenshot of Holtwick Tavern: a frontier village floor with the player, Edda the blacksmith and Finn the tavern keeper." />
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Holtwick Tavern - browser RPG with local LLM NPCs" />
+  <meta name="twitter:description" content="A frontier pixel-art village with two NPCs powered by a local LLM. Runs entirely in your browser." />
+  <meta name="twitter:image" content="https://lucianosmori.github.io/holtwick-tavern/assets/preview.png?v=1" />
   <style>
     /* Reset + full-viewport game */
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -11,7 +31,7 @@
     body { font-family: system-ui, -apple-system, sans-serif; color: #eee; }
 
     #game-container { width: 100vw; height: 100vh; }
-    #game-container canvas { display: block; margin: 0 auto; }
+    #game-container canvas { display: block; margin: 0 auto; image-rendering: pixelated; image-rendering: crisp-edges; }
 
     /* Touch-only joystick (shown on coarse pointer / touch devices) */
     #joystick {
@@ -256,37 +276,97 @@
     class WorldScene extends Phaser.Scene {
       constructor() { super('world'); }
 
+      preload() {
+        const DIRS = ['south', 'east', 'north', 'west'];
+        this.load.image('tileset', 'assets/tileset.png');
+        for (const id of ['player', 'edda', 'finn']) {
+          for (const d of DIRS) {
+            this.load.image(`${id}_${d}`, `assets/${id}_${d}.png`);
+          }
+        }
+      }
+
       create() {
         const w = this.scale.width;
         const h = this.scale.height;
 
-        // Floor — a tiled green ground.
-        const floor = this.add.graphics();
-        floor.fillStyle(0x2d4a2b, 1);
-        floor.fillRect(0, 0, 1600, 1200);
-        for (let x = 0; x < 1600; x += 32) {
-          for (let y = 0; y < 1200; y += 32) {
-            if ((x + y) % 64 === 0) {
-              floor.fillStyle(0x365a34, 1);
-              floor.fillRect(x, y, 32, 32);
+        // Floor — pixel-art Wang tileset, grass with naturally-edged dirt clumps.
+        // Bboxes from assets/tileset.json. Key encodes corners as NW_NE_SW_SE
+        // where 1 = upper (grass) and 0 = lower (dirt).
+        const TILE_SRC = 16, TILE_DRAW = 32;
+        const tex = this.textures.get('tileset');
+        const WANG = {
+          '1_1_1_1': [0, 48], '0_0_0_0': [32, 16],
+          '1_1_1_0': [16, 48], '1_1_0_1': [0, 0],
+          '1_1_0_0': [48, 0],  '1_0_1_1': [0, 32],
+          '1_0_1_0': [16, 0],  '1_0_0_1': [32, 48],
+          '1_0_0_0': [16, 16], '0_1_1_1': [48, 48],
+          '0_1_1_0': [0, 16],  '0_1_0_1': [48, 32],
+          '0_1_0_0': [32, 0],  '0_0_1_1': [16, 32],
+          '0_0_1_0': [32, 32], '0_0_0_1': [48, 16],
+        };
+        for (const [key, [x, y]] of Object.entries(WANG)) {
+          tex.add(`f_${key}`, 0, x, y, TILE_SRC, TILE_SRC);
+        }
+        const cols = Math.ceil(1600 / TILE_DRAW);
+        const rows = Math.ceil(1200 / TILE_DRAW);
+        // Build (cols+1)×(rows+1) vertex grid; 1=grass, 0=dirt clumped at seed points.
+        const vCols = cols + 1, vRows = rows + 1;
+        const v = new Uint8Array(vCols * vRows).fill(1);
+        const seeds = [
+          { x: Math.floor(vCols * 0.30), y: Math.floor(vRows * 0.35), r: 6 },
+          { x: Math.floor(vCols * 0.72), y: Math.floor(vRows * 0.72), r: 5 },
+          { x: Math.floor(vCols * 0.55), y: Math.floor(vRows * 0.18), r: 4 },
+          { x: Math.floor(vCols * 0.18), y: Math.floor(vRows * 0.78), r: 4 },
+          { x: Math.floor(vCols * 0.85), y: Math.floor(vRows * 0.30), r: 3 },
+        ];
+        for (const s of seeds) {
+          for (let dy = -s.r; dy <= s.r; dy++) {
+            for (let dx = -s.r; dx <= s.r; dx++) {
+              const d = Math.hypot(dx, dy);
+              if (d > s.r) continue;
+              const vx = s.x + dx, vy = s.y + dy;
+              if (vx < 0 || vx >= vCols || vy < 0 || vy >= vRows) continue;
+              const p = 1 - d / s.r;
+              const noise = ((vy * 73856093) ^ (vx * 19349663)) % 100;
+              if ((noise + 100) % 100 < p * 100) v[vy * vCols + vx] = 0;
             }
           }
         }
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const nw = v[r * vCols + c];
+            const ne = v[r * vCols + (c + 1)];
+            const sw = v[(r + 1) * vCols + c];
+            const se = v[(r + 1) * vCols + (c + 1)];
+            const key = `f_${nw}_${ne}_${sw}_${se}`;
+            this.add.image(c * TILE_DRAW, r * TILE_DRAW, 'tileset', key)
+              .setOrigin(0, 0)
+              .setDisplaySize(TILE_DRAW, TILE_DRAW);
+          }
+        }
 
-        // Player — yellow circle, simple.
-        this.player = this.add.circle(800, 600, 14, 0xffd966);
-        this.physics.add.existing(this.player);
-        this.player.body.setCollideWorldBounds(true);
+        // Player — pixel-art sprite, faces direction of movement.
+        this.player = this.physics.add.sprite(800, 600, 'player_south');
+        this.player.setScale(1.6);
+        this.player.body.setSize(28, 38).setOffset(20, 26);
+        this.player.setCollideWorldBounds(true);
+        this.facing = 'south';
 
-        // NPCs — colored squares with name labels. Each entry { id, name, x, y, color }.
+        // NPCs — pixel-art sprites with name labels. Each entry { id, name, x, y }.
         // Personas live in npcs/<id>.json and are loaded lazily by the chat layer.
         this.npcs = [
-          { id: 'edda', name: 'Edda', x: 900, y: 550, color: 0xff7f50 },
-          { id: 'finn', name: 'Finn', x: 700, y: 700, color: 0x8b5cf6 },
+          { id: 'edda', name: 'Edda', x: 980, y: 540 },
+          { id: 'finn', name: 'Finn', x: 620, y: 720 },
         ].map(spec => {
-          const sprite = this.add.rectangle(spec.x, spec.y, 28, 28, spec.color);
-          this.physics.add.existing(sprite, true);
-          this.add.text(spec.x, spec.y - 30, spec.name, { fontSize: '14px', color: '#ffd966' }).setOrigin(0.5);
+          const sprite = this.physics.add.sprite(spec.x, spec.y, `${spec.id}_south`);
+          sprite.setScale(1.5);
+          sprite.body.setImmovable(true);
+          sprite.body.moves = false;
+          sprite.body.setSize(28, 38).setOffset(20, 26);
+          this.add.text(spec.x, spec.y - 36, spec.name, {
+            fontSize: '14px', color: '#ffd966', stroke: '#000', strokeThickness: 3
+          }).setOrigin(0.5);
           return { ...spec, sprite };
         });
 
@@ -336,11 +416,32 @@
 
         this.player.body.setVelocity(vx * speed, vy * speed);
 
+        // Player faces direction of movement
+        if (mag > 0.05) {
+          const newFacing = (Math.abs(vx) > Math.abs(vy))
+            ? (vx > 0 ? 'east' : 'west')
+            : (vy > 0 ? 'south' : 'north');
+          if (newFacing !== this.facing) {
+            this.facing = newFacing;
+            this.player.setTexture(`player_${newFacing}`);
+          }
+        }
+
+        // NPCs face the player
+        for (const npc of this.npcs) {
+          const dx = this.player.x - npc.x, dy = this.player.y - npc.y;
+          const dir = (Math.abs(dx) > Math.abs(dy))
+            ? (dx > 0 ? 'east' : 'west')
+            : (dy > 0 ? 'south' : 'north');
+          const want = `${npc.id}_${dir}`;
+          if (npc.sprite.texture.key !== want) npc.sprite.setTexture(want);
+        }
+
         // Proximity check — pick nearest NPC within range
         let nearest = null, nearestDist = Infinity;
         for (const npc of this.npcs) {
           const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, npc.x, npc.y);
-          if (d < 60 && d < nearestDist) { nearest = npc; nearestDist = d; }
+          if (d < 70 && d < nearestDist) { nearest = npc; nearestDist = d; }
         }
         const nowNearId = nearest ? nearest.id : null;
         if (nowNearId !== this.nearNpcId) {
@@ -365,6 +466,7 @@
       width: window.innerWidth,
       height: window.innerHeight,
       backgroundColor: '#0a0e1a',
+      pixelArt: true,
       physics: { default: 'arcade', arcade: { gravity: { y: 0 } } },
       scale: {
         mode: Phaser.Scale.RESIZE,
