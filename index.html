@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <title>fiesta-poc-rpg-npc-dialog</title>
+  <style>
+    /* Reset + full-viewport game */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; -webkit-tap-highlight-color: transparent; }
+    body { font-family: system-ui, -apple-system, sans-serif; color: #eee; }
+
+    #game-container { width: 100vw; height: 100vh; }
+    #game-container canvas { display: block; margin: 0 auto; }
+
+    /* Touch-only joystick (shown on coarse pointer / touch devices) */
+    #joystick {
+      display: none;
+      position: fixed;
+      bottom: 24px;
+      left: 24px;
+      width: 130px;
+      height: 130px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.10);
+      border: 2px solid rgba(255, 255, 255, 0.35);
+      touch-action: none;
+      z-index: 10;
+    }
+    #joystick-knob {
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 60px; height: 60px;
+      margin-left: -30px; margin-top: -30px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.55);
+      pointer-events: none;
+    }
+    #interact-btn {
+      display: none;
+      position: fixed;
+      bottom: 48px;
+      right: 32px;
+      width: 90px;
+      height: 90px;
+      border-radius: 50%;
+      background: rgba(255, 200, 80, 0.85);
+      color: #222;
+      font-weight: 700;
+      font-size: 18px;
+      border: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 10;
+      touch-action: manipulation;
+    }
+    @media (pointer: coarse) {
+      #joystick, #interact-btn { display: block; }
+    }
+
+    /* Hint overlay */
+    #hint {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 8px 16px;
+      background: rgba(0,0,0,0.6);
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 8px;
+      font-size: 14px;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      opacity: 0;
+      z-index: 5;
+    }
+    #hint.show { opacity: 1; }
+
+    /* Dialog modal — chat-style for iter 2 */
+    #dialog-backdrop {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 100;
+      align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    #dialog-backdrop.show { display: flex; }
+    #dialog {
+      max-width: 620px;
+      width: 100%;
+      max-height: 85vh;
+      background: #1d2230;
+      border: 2px solid #4a5775;
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #dialog-header { display: flex; justify-content: space-between; align-items: center; }
+    #dialog-name { font-weight: 700; color: #ffc850; font-size: 20px; }
+    #dialog-status {
+      font-size: 11px; color: #88a;
+      padding: 3px 8px;
+      background: rgba(140, 140, 200, 0.12);
+      border-radius: 999px;
+    }
+    #dialog-status.error { color: #ff8a8a; background: rgba(220, 80, 80, 0.15); }
+    #dialog-status.ready { color: #98e26b; background: rgba(140, 220, 100, 0.15); }
+    #chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 8px;
+      background: rgba(0,0,0,0.25);
+      border-radius: 8px;
+      min-height: 200px;
+      max-height: 50vh;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .msg { padding: 6px 10px; border-radius: 8px; max-width: 88%; word-wrap: break-word; }
+    .msg.npc { background: #2a3548; color: #f0e0c0; align-self: flex-start; }
+    .msg.user { background: #4a5775; color: #fff; align-self: flex-end; }
+    .msg.system { background: rgba(255, 200, 80, 0.15); color: #ffc850; font-size: 12px; align-self: center; max-width: 90%; text-align: center; }
+    .msg.npc.streaming::after { content: '▌'; animation: blink 1s infinite; }
+    @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+    #chat-input-row {
+      display: flex; gap: 8px;
+    }
+    #chat-input {
+      flex: 1;
+      padding: 8px 12px;
+      background: #15202b;
+      color: #fff;
+      border: 1px solid #4a5775;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    #chat-input:disabled { opacity: 0.5; }
+    #chat-send {
+      padding: 8px 16px;
+      background: #ffc850;
+      color: #222;
+      font-weight: 700;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    #chat-send:disabled { opacity: 0.4; cursor: wait; }
+    #chat-send:hover:not(:disabled) { background: #ffd870; }
+    #dialog-close {
+      align-self: flex-end;
+      padding: 5px 12px;
+      background: #3a4565;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    #dialog-close:hover { background: #5a6995; }
+  </style>
+</head>
+<body>
+  <div id="game-container"></div>
+
+  <div id="joystick"><div id="joystick-knob"></div></div>
+  <button id="interact-btn">TALK</button>
+  <div id="hint">Press E to talk</div>
+
+  <div id="dialog-backdrop" role="dialog" aria-modal="true">
+    <div id="dialog">
+      <div id="dialog-header">
+        <div id="dialog-name">Edda the Blacksmith</div>
+        <div id="dialog-status">init</div>
+      </div>
+      <div id="chat-messages"></div>
+      <div id="chat-input-row">
+        <input id="chat-input" placeholder="Say something to Edda..." autocomplete="off" />
+        <button id="chat-send">Send</button>
+      </div>
+      <button id="dialog-close">Close</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+  <script>
+    // === Joystick state (touch-only) ===
+    const joystick = { active: false, x: 0, y: 0 };
+    (function setupJoystick() {
+      const root = document.getElementById('joystick');
+      const knob = document.getElementById('joystick-knob');
+      const radius = 65;
+      const handleStart = (e) => {
+        e.preventDefault();
+        joystick.active = true;
+      };
+      const handleMove = (e) => {
+        if (!joystick.active) return;
+        e.preventDefault();
+        const t = e.touches ? e.touches[0] : e;
+        const r = root.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        let dx = t.clientX - cx;
+        let dy = t.clientY - cy;
+        const d = Math.hypot(dx, dy);
+        if (d > radius) { dx = dx * radius / d; dy = dy * radius / d; }
+        joystick.x = dx / radius;
+        joystick.y = dy / radius;
+        knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      };
+      const handleEnd = (e) => {
+        e.preventDefault();
+        joystick.active = false;
+        joystick.x = 0; joystick.y = 0;
+        knob.style.transform = 'translate(0, 0)';
+      };
+      root.addEventListener('touchstart', handleStart, { passive: false });
+      root.addEventListener('touchmove', handleMove, { passive: false });
+      root.addEventListener('touchend', handleEnd, { passive: false });
+      root.addEventListener('touchcancel', handleEnd, { passive: false });
+    })();
+
+    // === Chat-backed dialog modal (iter 2) ===
+    // The actual WebLLM engine + model lifecycle lives in the module script
+    // below; `window.npcChat` is the bridge it exposes for the Phaser scene.
+    const dialog = {
+      open(npcId) {
+        document.getElementById('dialog-backdrop').classList.add('show');
+        document.body.style.pointerEvents = 'auto';
+        if (window.npcChat) window.npcChat.onOpen(npcId);
+      },
+      close() {
+        document.getElementById('dialog-backdrop').classList.remove('show');
+        if (window.npcChat) window.npcChat.onClose();
+      },
+      isOpen() {
+        return document.getElementById('dialog-backdrop').classList.contains('show');
+      },
+    };
+    document.getElementById('dialog-close').addEventListener('click', () => dialog.close());
+    document.getElementById('dialog-backdrop').addEventListener('click', (e) => {
+      if (e.target.id === 'dialog-backdrop') dialog.close();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && dialog.isOpen()) dialog.close();
+    });
+
+    // === Phaser scene ===
+    class WorldScene extends Phaser.Scene {
+      constructor() { super('world'); }
+
+      create() {
+        const w = this.scale.width;
+        const h = this.scale.height;
+
+        // Floor — a tiled green ground.
+        const floor = this.add.graphics();
+        floor.fillStyle(0x2d4a2b, 1);
+        floor.fillRect(0, 0, 1600, 1200);
+        for (let x = 0; x < 1600; x += 32) {
+          for (let y = 0; y < 1200; y += 32) {
+            if ((x + y) % 64 === 0) {
+              floor.fillStyle(0x365a34, 1);
+              floor.fillRect(x, y, 32, 32);
+            }
+          }
+        }
+
+        // Player — yellow circle, simple.
+        this.player = this.add.circle(800, 600, 14, 0xffd966);
+        this.physics.add.existing(this.player);
+        this.player.body.setCollideWorldBounds(true);
+
+        // NPCs — colored squares with name labels. Each entry { id, name, x, y, color }.
+        // Personas live in npcs/<id>.json and are loaded lazily by the chat layer.
+        this.npcs = [
+          { id: 'edda', name: 'Edda', x: 900, y: 550, color: 0xff7f50 },
+          { id: 'finn', name: 'Finn', x: 700, y: 700, color: 0x8b5cf6 },
+        ].map(spec => {
+          const sprite = this.add.rectangle(spec.x, spec.y, 28, 28, spec.color);
+          this.physics.add.existing(sprite, true);
+          this.add.text(spec.x, spec.y - 30, spec.name, { fontSize: '14px', color: '#ffd966' }).setOrigin(0.5);
+          return { ...spec, sprite };
+        });
+
+        // World bounds
+        this.physics.world.setBounds(0, 0, 1600, 1200);
+        this.cameras.main.setBounds(0, 0, 1600, 1200);
+        this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+
+        // Input
+        this.cursors = this.input.keyboard.createCursorKeys();
+        this.wasd = this.input.keyboard.addKeys({ up: 'W', down: 'S', left: 'A', right: 'D' });
+        this.eKey = this.input.keyboard.addKey('E');
+
+        // Mobile interact button
+        document.getElementById('interact-btn').addEventListener('click', () => this.tryInteract());
+
+        // Track which NPC the player is near (id, or null)
+        this.nearNpcId = null;
+      }
+
+      tryInteract() {
+        if (!this.nearNpcId) return;
+        if (dialog.isOpen()) return;
+        // Iter 3: open chat with the nearest NPC by id; chat layer loads persona JSON.
+        dialog.open(this.nearNpcId);
+      }
+
+      update() {
+        if (dialog.isOpen()) {
+          // freeze player while dialog open
+          this.player.body.setVelocity(0, 0);
+          return;
+        }
+
+        const speed = 200;
+        let vx = 0, vy = 0;
+        if (this.cursors.left.isDown || this.wasd.left.isDown) vx -= 1;
+        if (this.cursors.right.isDown || this.wasd.right.isDown) vx += 1;
+        if (this.cursors.up.isDown || this.wasd.up.isDown) vy -= 1;
+        if (this.cursors.down.isDown || this.wasd.down.isDown) vy += 1;
+        // Joystick override on touch
+        if (joystick.active) { vx = joystick.x; vy = joystick.y; }
+
+        // Normalize diagonal speed
+        const mag = Math.hypot(vx, vy);
+        if (mag > 1) { vx /= mag; vy /= mag; }
+
+        this.player.body.setVelocity(vx * speed, vy * speed);
+
+        // Proximity check — pick nearest NPC within range
+        let nearest = null, nearestDist = Infinity;
+        for (const npc of this.npcs) {
+          const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, npc.x, npc.y);
+          if (d < 60 && d < nearestDist) { nearest = npc; nearestDist = d; }
+        }
+        const nowNearId = nearest ? nearest.id : null;
+        if (nowNearId !== this.nearNpcId) {
+          this.nearNpcId = nowNearId;
+          const hint = document.getElementById('hint');
+          if (nowNearId) {
+            const tapMode = window.matchMedia('(pointer: coarse)').matches;
+            hint.textContent = tapMode ? `Tap TALK to talk to ${nearest.name}` : `Press E to talk to ${nearest.name}`;
+            hint.classList.add('show');
+          } else {
+            hint.classList.remove('show');
+          }
+        }
+
+        if (Phaser.Input.Keyboard.JustDown(this.eKey)) this.tryInteract();
+      }
+    }
+
+    new Phaser.Game({
+      type: Phaser.AUTO,
+      parent: 'game-container',
+      width: window.innerWidth,
+      height: window.innerHeight,
+      backgroundColor: '#0a0e1a',
+      physics: { default: 'arcade', arcade: { gravity: { y: 0 } } },
+      scale: {
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+      },
+      scene: [WorldScene],
+    });
+  </script>
+
+  <script type="module">
+    // ============================================================
+    // WebLLM-backed NPC chat (iter 2)
+    // Model: Qwen2.5-1.5B-Instruct (~1 GB, IndexedDB-cached after first load)
+    // ============================================================
+    import { CreateMLCEngine } from "https://esm.run/@mlc-ai/web-llm@0.2.79";
+
+    const MODEL_ID = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
+
+    // NPC personas live in npcs/<id>.json so adding NPCs is data, not code.
+    async function loadNpc(id) {
+      if (npcCache[id]) return npcCache[id];
+      const res = await fetch(`npcs/${id}.json`);
+      if (!res.ok) throw new Error(`failed to load npcs/${id}.json: ${res.status}`);
+      npcCache[id] = await res.json();
+      return npcCache[id];
+    }
+
+    function activeNpc() { return npcCache[activeNpcId] || null; }
+    function activeHistory() {
+      if (!histories[activeNpcId]) histories[activeNpcId] = [];
+      return histories[activeNpcId];
+    }
+
+    function buildMessages(npc, userHistory) {
+      const fewShot = (npc.few_shots || []).flatMap(ex => ([
+        { role: 'user', content: ex.user },
+        { role: 'assistant', content: ex.assistant },
+      ]));
+      return [
+        { role: 'system', content: npc.system_prompt },
+        ...fewShot,
+        ...userHistory,
+      ];
+    }
+
+    const $messages = document.getElementById('chat-messages');
+    const $input    = document.getElementById('chat-input');
+    const $send     = document.getElementById('chat-send');
+    const $status   = document.getElementById('dialog-status');
+
+    let engine = null;
+    let loading = false;
+    let activeNpcId = null;             // id of NPC the dialog is currently focused on
+    const npcCache = {};                // id → loaded NPC json
+    const histories = {};               // id → message[] (excluding system + few-shots)
+    let opened = false;                 // true after first dialog open of any NPC
+
+    const $dialogName = document.getElementById('dialog-name');
+
+    function setStatus(text, kind = '') {
+      $status.textContent = text;
+      $status.className = kind; // '' | 'ready' | 'error'
+    }
+
+    function addMessage(role, text, opts = {}) {
+      const div = document.createElement('div');
+      div.className = `msg ${role}` + (opts.streaming ? ' streaming' : '');
+      div.textContent = text;
+      $messages.appendChild(div);
+      $messages.scrollTop = $messages.scrollHeight;
+      return div;
+    }
+
+    function setUIBusy(busy) {
+      $input.disabled = busy;
+      $send.disabled = busy;
+      if (!busy) $input.focus();
+    }
+
+    async function ensureEngine() {
+      if (engine && !loading) return;
+      if (loading) return;
+      loading = true;
+      setUIBusy(true);
+      try {
+        if (!engine) {
+          setStatus('downloading model…');
+          engine = await CreateMLCEngine(MODEL_ID, {
+            initProgressCallback: (p) => {
+              const pct = Math.round((p.progress ?? 0) * 100);
+              setStatus(`loading ${pct}%`);
+            },
+          });
+        }
+        setStatus('ready', 'ready');
+      } catch (err) {
+        console.error('WebLLM init failed', err);
+        setStatus('webgpu unavailable', 'error');
+        addMessage('system', "This NPC stays mute — your browser doesn't support local AI (WebGPU required). Try Chrome/Edge on desktop or Safari 18+.");
+        engine = null;
+        return;
+      } finally {
+        loading = false;
+        setUIBusy(false);
+      }
+    }
+
+    async function focusNpc(id) {
+      activeNpcId = id;
+      $messages.innerHTML = '';
+      try {
+        const npc = await loadNpc(id);
+        $dialogName.textContent = npc.label || npc.name || id;
+        // Re-render persisted history for this NPC
+        const h = activeHistory();
+        if (h.length === 0) {
+          // First visit to this NPC — show opening line
+          addMessage('npc', npc.opening);
+          h.push({ role: 'assistant', content: npc.opening });
+        } else {
+          for (const m of h) addMessage(m.role === 'assistant' ? 'npc' : m.role, m.content);
+        }
+      } catch (err) {
+        console.error('NPC load failed', err);
+        addMessage('system', `Failed to load NPC: ${err.message}`);
+      }
+    }
+
+    async function sendUserTurn(text) {
+      if (!engine) return;
+      const npc = activeNpc();
+      if (!npc) return;
+      const h = activeHistory();
+      addMessage('user', text);
+      h.push({ role: 'user', content: text });
+
+      // Stream NPC response
+      const npcDiv = addMessage('npc', '', { streaming: true });
+      setUIBusy(true);
+      try {
+        const stream = await engine.chat.completions.create({
+          messages: buildMessages(npc, h),
+          stream: true,
+          temperature: npc.model?.temperature ?? 0.8,
+          max_tokens: npc.model?.max_tokens ?? 120,
+        });
+        let acc = '';
+        for await (const chunk of stream) {
+          const delta = chunk.choices?.[0]?.delta?.content || '';
+          acc += delta;
+          npcDiv.textContent = acc;
+          $messages.scrollTop = $messages.scrollHeight;
+        }
+        npcDiv.classList.remove('streaming');
+        h.push({ role: 'assistant', content: acc });
+
+        // Cap history to last 12 turns per NPC to keep prompt small
+        if (h.length > 12) histories[activeNpcId] = h.slice(-12);
+      } catch (err) {
+        console.error('chat completion failed', err);
+        npcDiv.classList.remove('streaming');
+        npcDiv.textContent = `… (${npc.name} loses their words)`;
+      } finally {
+        setUIBusy(false);
+      }
+    }
+
+    $send.addEventListener('click', () => {
+      const text = $input.value.trim();
+      if (!text || !engine) return;
+      $input.value = '';
+      sendUserTurn(text);
+    });
+    $input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        $send.click();
+      }
+    });
+
+    // Bridge to the Phaser-scene `dialog` object. The scene passes the NPC id
+    // (e.g. 'edda', 'finn'); the chat layer focuses that NPC and lazy-loads
+    // the model on first open of any NPC.
+    window.npcChat = {
+      async onOpen(npcId) {
+        if (!opened) {
+          opened = true;
+          ensureEngine();  // fire-and-forget; first call shows download UI
+        }
+        await focusNpc(npcId || 'edda');
+        setTimeout(() => $input.focus(), 50);
+      },
+      onClose() {
+        // Keep model + per-NPC histories loaded so re-opens are instant.
+      },
+    };
+  </script>
+</body>
+</html>
