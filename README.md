@@ -6,8 +6,9 @@ A small fantasy village rendered in Phaser 3 where you can chat with two NPCs wh
 
 ## What's in it
 
-- **Edda the Blacksmith** — terse, in-character forge owner. She answers in 1–2 sentences and won't talk about anything outside the village.
-- **Finn the Tavern Keeper** — gossipy, drops village rumors freely, longer replies, refers to ale and the hearth.
+- **Edda the Blacksmith** — terse, in-character forge owner. She answers in 1–2 sentences and won't talk about anything outside the village. Spoken in a slow, low voice.
+- **Finn the Tavern Keeper** — gossipy, drops village rumors freely, longer replies, refers to ale and the hearth. Spoken in a fast, bright voice.
+- **Spoken NPC replies** via the browser's SpeechSynthesis API. Each NPC has a distinct voice configured in its JSON (`rate`, `pitch`, `lang_prefix`). A 🔊/🔇 toggle in the dialog header persists to localStorage. Hidden gracefully on browsers without SpeechSynthesis. No extra dependencies.
 
 Walk up to either NPC, press <kbd>E</kbd> (desktop) or tap the **TALK** button (mobile), and chat. Each NPC keeps its own conversation history within a session. Switching back to the other NPC resumes that thread.
 
@@ -18,7 +19,8 @@ Walk up to either NPC, press <kbd>E</kbd> (desktop) or tap the **TALK** button (
 | 2D engine | [Phaser 3.80](https://phaser.io/) | Loaded from CDN. Top-down scene, custom DOM virtual joystick on touch. |
 | In-browser LLM | [WebLLM 0.2.79](https://github.com/mlc-ai/web-llm) | OpenAI-compatible streaming API, runs models locally on WebGPU. |
 | Model | [Qwen2.5-1.5B-Instruct (q4f16_1)](https://huggingface.co/mlc-ai/Qwen2.5-1.5B-Instruct-q4f16_1-MLC) | ~1 GB quantized weights, served from MLC's HuggingFace mirror. |
-| Persona format | JSON in `npcs/<id>.json` | `{ id, name, label, opening, system_prompt, few_shots[], model: { temperature, max_tokens } }`. Adding NPCs is data-only — drop a file in `npcs/`, add an entry to the scene's `this.npcs[]`. |
+| Persona format | JSON in `npcs/<id>.json` | `{ id, name, label, opening, system_prompt, few_shots[], model: { temperature, max_tokens }, voice?: { lang_prefix, rate, pitch } }`. Adding NPCs is data-only — drop a file in `npcs/`, add an entry to the scene's `this.npcs[]`. |
+| Voice | Browser [SpeechSynthesis API](https://developer.mozilla.org/en-US/docs/Web/API/SpeechSynthesis) | No external TTS service. Picks the first installed voice whose `lang` starts with the NPC's `lang_prefix` (default `en`). Feature-detected — `🔊` toggle stays hidden when the API is unavailable. |
 
 ## Running locally
 
@@ -75,7 +77,15 @@ Open http://localhost:8000 and walk up to either colored square.
    { id: 'ada', name: 'Ada', x: 1100, y: 800, color: 0x6ad55c },
    ```
 
-That's all. Persona, opening line, few-shots, and model knobs are data; the dialog flow stays the same.
+That's all. Persona, opening line, few-shots, model knobs, and voice are data; the dialog flow stays the same.
+
+Add an optional `voice` block to give the NPC a distinct spoken voice:
+
+```json
+"voice": { "lang_prefix": "en", "rate": 0.95, "pitch": 1.0 }
+```
+
+`rate` and `pitch` default to `1.0`; `lang_prefix` defaults to `"en"` and is matched against the prefix of installed `SpeechSynthesisVoice.lang` values.
 
 ## License
 
