@@ -127,6 +127,20 @@
     }
     #dialog-status.error { color: #ff8a8a; background: rgba(220, 80, 80, 0.15); }
     #dialog-status.ready { color: #98e26b; background: rgba(140, 220, 100, 0.15); }
+    #dialog-tools { display: flex; align-items: center; gap: 8px; }
+    #tts-toggle {
+      padding: 3px 10px;
+      background: rgba(140, 140, 200, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 999px;
+      color: #cfd2e6;
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    #tts-toggle:hover { background: rgba(140, 140, 200, 0.25); }
+    #tts-toggle.off { opacity: 0.45; }
+    #tts-toggle[hidden] { display: none; }
     #chat-messages {
       flex: 1;
       overflow-y: auto;
@@ -197,7 +211,10 @@
     <div id="dialog">
       <div id="dialog-header">
         <div id="dialog-name">Edda the Blacksmith</div>
-        <div id="dialog-status">init</div>
+        <div id="dialog-tools">
+          <button id="tts-toggle" type="button" title="Toggle voice" aria-label="Toggle voice" hidden>🔊</button>
+          <div id="dialog-status">init</div>
+        </div>
       </div>
       <div id="chat-messages"></div>
       <div id="chat-input-row">
@@ -484,6 +501,7 @@
     import { CreateMLCEngine } from "https://esm.run/@mlc-ai/web-llm@0.2.79";
 
     const MODEL_ID = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
+    const TTS_STORAGE_KEY = "holtwick-tavern:tts:v1";
 
     // NPC personas live in npcs/<id>.json so adding NPCs is data, not code.
     async function loadNpc(id) {
@@ -525,10 +543,70 @@
     let opened = false;                 // true after first dialog open of any NPC
 
     const $dialogName = document.getElementById('dialog-name');
+    const $tts        = document.getElementById('tts-toggle');
 
     function setStatus(text, kind = '') {
       $status.textContent = text;
       $status.className = kind; // '' | 'ready' | 'error'
+    }
+
+    // === TTS (browser SpeechSynthesis, no deps) =================================
+    // Per-NPC voice tweaks live in npcs/<id>.json under `voice: { rate, pitch, lang_prefix }`.
+    // Toggle state persists in localStorage; hidden entirely when the API is missing.
+    const ttsAvailable = typeof window.speechSynthesis !== 'undefined'
+                       && typeof window.SpeechSynthesisUtterance !== 'undefined';
+    let ttsEnabled = false;
+    if (ttsAvailable) {
+      try {
+        const stored = localStorage.getItem(TTS_STORAGE_KEY);
+        ttsEnabled = stored === null ? true : stored === '1';
+      } catch { ttsEnabled = true; }
+      $tts.hidden = false;
+      syncTtsUi();
+      $tts.addEventListener('click', () => {
+        ttsEnabled = !ttsEnabled;
+        try { localStorage.setItem(TTS_STORAGE_KEY, ttsEnabled ? '1' : '0'); } catch {}
+        if (!ttsEnabled) try { window.speechSynthesis.cancel(); } catch {}
+        syncTtsUi();
+      });
+    }
+    function syncTtsUi() {
+      if (!ttsAvailable) return;
+      $tts.textContent = ttsEnabled ? '🔊' : '🔇';
+      $tts.classList.toggle('off', !ttsEnabled);
+    }
+
+    let _voicesCache = ttsAvailable ? (window.speechSynthesis.getVoices() || []) : [];
+    if (ttsAvailable && typeof window.speechSynthesis.addEventListener === 'function') {
+      window.speechSynthesis.addEventListener('voiceschanged', () => {
+        _voicesCache = window.speechSynthesis.getVoices() || [];
+      });
+    }
+    function pickVoice(npc) {
+      if (!_voicesCache.length) return null;
+      const wantLang = ((npc.voice && npc.voice.lang_prefix) || 'en').toLowerCase();
+      return _voicesCache.find(v => (v.lang || '').toLowerCase().startsWith(wantLang)) || _voicesCache[0];
+    }
+    function speakAs(npc, text) {
+      if (!ttsAvailable || !ttsEnabled) return;
+      const clean = (text || '').trim();
+      if (!clean) return;
+      try {
+        window.speechSynthesis.cancel();
+        const utt = new SpeechSynthesisUtterance(clean);
+        const cfg = npc.voice || {};
+        utt.rate = cfg.rate ?? 1;
+        utt.pitch = cfg.pitch ?? 1;
+        const v = pickVoice(npc);
+        if (v) { utt.voice = v; utt.lang = v.lang; }
+        window.speechSynthesis.speak(utt);
+      } catch (err) {
+        console.warn('TTS speak failed', err);
+      }
+    }
+    function cancelSpeech() {
+      if (!ttsAvailable) return;
+      try { window.speechSynthesis.cancel(); } catch {}
     }
 
     function addMessage(role, text, opts = {}) {
@@ -586,6 +664,7 @@
           // First visit to this NPC — show opening line
           addMessage('npc', npc.opening);
           h.push({ role: 'assistant', content: npc.opening });
+          speakAs(npc, npc.opening);
         } else {
           for (const m of h) addMessage(m.role === 'assistant' ? 'npc' : m.role, m.content);
         }
@@ -599,6 +678,7 @@
       if (!engine) return;
       const npc = activeNpc();
       if (!npc) return;
+      cancelSpeech(); // user-initiated turn → drop any in-flight NPC speech
       const h = activeHistory();
       addMessage('user', text);
       h.push({ role: 'user', content: text });
@@ -625,6 +705,7 @@
 
         // Cap history to last 12 turns per NPC to keep prompt small
         if (h.length > 12) histories[activeNpcId] = h.slice(-12);
+        speakAs(npc, acc);
       } catch (err) {
         console.error('chat completion failed', err);
         npcDiv.classList.remove('streaming');
@@ -661,6 +742,7 @@
       },
       onClose() {
         // Keep model + per-NPC histories loaded so re-opens are instant.
+        cancelSpeech();
       },
     };
   </script>

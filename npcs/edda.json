@@ -17,5 +17,10 @@
   "model": {
     "temperature": 0.8,
     "max_tokens": 120
+  },
+  "voice": {
+    "lang_prefix": "en",
+    "rate": 0.92,
+    "pitch": 0.85
   }
 }
