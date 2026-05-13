@@ -500,7 +500,9 @@
     // ============================================================
     import { CreateMLCEngine } from "https://esm.run/@mlc-ai/web-llm@0.2.79";
 
-    const MODEL_ID = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
+    const DEFAULT_MODEL_ID = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
+    // Allow ?model=<MLC_ID> to override the default for the model-comparison harness.
+    const MODEL_ID = new URLSearchParams(location.search).get('model') || DEFAULT_MODEL_ID;
     const TTS_STORAGE_KEY = "holtwick-tavern:tts:v1";
 
     // NPC personas live in npcs/<id>.json so adding NPCs is data, not code.
