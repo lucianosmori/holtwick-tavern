@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Holtwick smoke harness — chain runner</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem; max-width: 1100px; }
+  h1 { font-size: 1.1rem; margin: 0 0 .5rem; }
+  .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: .5rem; }
+  button { padding: .35rem .7rem; cursor: pointer; }
+  button[disabled] { opacity: .5; cursor: not-allowed; }
+  .status { font-family: ui-monospace, monospace; color: #444; }
+  .status.error { color: #b00020; }
+  .status.ready { color: #0a7d2c; }
+  table { border-collapse: collapse; width: 100%; margin-top: .75rem; font-size: 12px; }
+  th, td { border: 1px solid #ddd; padding: 4px 6px; vertical-align: top; }
+  th { background: #f4f4f4; text-align: left; }
+  td.metric { font-family: ui-monospace, monospace; text-align: right; white-space: nowrap; }
+  textarea { width: 100%; height: 200px; font: 12px/1.4 ui-monospace, monospace; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 3px; background: #eef; font-family: ui-monospace, monospace; }
+  .done { color: #0a7d2c; }
+  .pending { color: #888; }
+  .running { color: #0049b0; }
+  .failed { color: #b00020; }
+</style>
+</head>
+<body>
+  <h1>Holtwick smoke harness — chain runner</h1>
+  <div class="row">
+    <button id="run">Run chain</button>
+    <span id="status" class="status">idle</span>
+  </div>
+  <p class="status">
+    URL override: append <code>?models=A,B,C,D</code> (comma-separated MLC IDs). Defaults to the four
+    POC candidates (baseline + 3 small models). Each model runs the full smoke set, unloads, then the
+    next model loads. When the chain finishes, click each <em>Download</em> button below to save
+    <code>results-&lt;slug&gt;.json</code> per model.
+  </p>
+  <table id="chain-table">
+    <thead>
+      <tr><th>#</th><th>model</th><th>state</th><th>turns ok</th><th>avg first&nbsp;ms</th><th>avg tok/s</th><th>download</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <h2 style="font-size:1rem;margin:1rem 0 .25rem;">Last-completed JSON preview</h2>
+  <textarea id="raw" readonly placeholder="Most-recent finished model's JSON appears here."></textarea>
+
+<script type="module">
+  import { CreateMLCEngine } from "https://esm.run/@mlc-ai/web-llm@0.2.79";
+
+  const DEFAULT_MODELS = [
+    "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
+    "SmolLM2-360M-Instruct-q4f16_1-MLC",
+    "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+    "Llama-3.2-1B-Instruct-q4f16_1-MLC",
+  ];
+
+  const paramModels = new URLSearchParams(location.search).get('models');
+  const MODELS = paramModels
+    ? paramModels.split(',').map(s => s.trim()).filter(Boolean)
+    : DEFAULT_MODELS;
+
+  const $status = document.getElementById('status');
+  const $run = document.getElementById('run');
+  const $raw = document.getElementById('raw');
+  const $tbody = document.querySelector('#chain-table tbody');
+
+  // pre-populate rows
+  const rowRefs = MODELS.map((m, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="metric">${idx + 1}</td>
+      <td><span class="pill">${m}</span></td>
+      <td class="state pending">pending</td>
+      <td class="metric turns"></td>
+      <td class="metric firstms"></td>
+      <td class="metric tps"></td>
+      <td class="dl"></td>
+    `;
+    $tbody.appendChild(tr);
+    return {
+      state: tr.querySelector('.state'),
+      turns: tr.querySelector('.turns'),
+      firstms: tr.querySelector('.firstms'),
+      tps: tr.querySelector('.tps'),
+      dl: tr.querySelector('.dl'),
+    };
+  });
+
+  function setStatus(text, kind = '') {
+    $status.textContent = text;
+    $status.className = 'status' + (kind ? ' ' + kind : '');
+  }
+  function setRow(i, partial) {
+    const r = rowRefs[i];
+    if (partial.state) {
+      r.state.textContent = partial.state;
+      r.state.className = 'state ' + partial.state;
+    }
+    if (partial.turns != null) r.turns.textContent = partial.turns;
+    if (partial.firstms != null) r.firstms.textContent = partial.firstms;
+    if (partial.tps != null) r.tps.textContent = partial.tps;
+    if (partial.downloadBlobUrl) {
+      const a = document.createElement('a');
+      a.href = partial.downloadBlobUrl;
+      a.download = partial.downloadName;
+      a.textContent = 'Download';
+      r.dl.innerHTML = '';
+      r.dl.appendChild(a);
+    }
+  }
+
+  function buildMessages(npc, userHistory) {
+    const fewShot = (npc.few_shots || []).flatMap(ex => ([
+      { role: 'user', content: ex.user },
+      { role: 'assistant', content: ex.assistant },
+    ]));
+    return [
+      { role: 'system', content: npc.system_prompt },
+      ...fewShot,
+      ...userHistory,
+    ];
+  }
+
+  async function fetchJson(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+    return r.json();
+  }
+
+  async function runOneModel(modelId, spec, npcMap, idx) {
+    setRow(idx, { state: 'running' });
+    setStatus(`[${idx + 1}/${MODELS.length}] loading ${modelId}…`);
+    let engine;
+    try {
+      engine = await CreateMLCEngine(modelId, {
+        initProgressCallback: (p) => {
+          const pct = Math.round((p.progress ?? 0) * 100);
+          setStatus(`[${idx + 1}/${MODELS.length}] ${modelId} ${pct}% — ${p.text || ''}`);
+        },
+      });
+    } catch (err) {
+      console.error('init failed', modelId, err);
+      setRow(idx, { state: 'failed' });
+      return { ok: false, error: String(err.message || err) };
+    }
+
+    const runtime = spec.runtime || {};
+    const out = {
+      schema_version: 1,
+      model_id: modelId,
+      user_agent: navigator.userAgent,
+      started_at: new Date().toISOString(),
+      runtime_used: runtime,
+      entries: [],
+    };
+
+    const ordered = [];
+    for (const npcId of ['edda', 'finn']) {
+      for (const entry of (spec[npcId] || [])) ordered.push({ npcId, entry });
+    }
+    const total = ordered.reduce((s, x) => s + x.entry.turns.length, 0);
+    let done = 0;
+    const firstMsList = [];
+    const tpsList = [];
+
+    for (const { npcId, entry } of ordered) {
+      const npc = npcMap[npcId];
+      const rt = runtime[npcId] || {};
+      const temperature = rt.temperature ?? npc.model?.temperature ?? 0.8;
+      const max_tokens = rt.max_tokens ?? npc.model?.max_tokens ?? 120;
+
+      const history = [];
+      const turnRecords = [];
+      for (let t = 0; t < entry.turns.length; t++) {
+        done++;
+        setStatus(`[${idx + 1}/${MODELS.length}] ${modelId} — ${npcId}/${entry.id} ${t + 1}/${entry.turns.length} (${done}/${total})`);
+        const userText = entry.turns[t];
+        history.push({ role: 'user', content: userText });
+
+        const t0 = performance.now();
+        let tFirst = null;
+        let reply = '';
+        let tokens_out = null;
+        try {
+          const stream = await engine.chat.completions.create({
+            messages: buildMessages(npc, history),
+            stream: true,
+            stream_options: { include_usage: true },
+            temperature,
+            max_tokens,
+          });
+          for await (const chunk of stream) {
+            const delta = chunk.choices?.[0]?.delta?.content || '';
+            if (delta && tFirst === null) tFirst = performance.now();
+            reply += delta;
+            if (chunk.usage && chunk.usage.completion_tokens != null) {
+              tokens_out = chunk.usage.completion_tokens;
+            }
+          }
+        } catch (err) {
+          console.error('completion failed', err);
+          reply = `__ERROR__ ${err.message || err}`;
+        }
+        const t1 = performance.now();
+        history.push({ role: 'assistant', content: reply });
+
+        const rec = {
+          turn: t + 1,
+          user: userText,
+          reply,
+          first_token_ms: tFirst ? Math.round(tFirst - t0) : null,
+          total_ms: Math.round(t1 - t0),
+          tokens_out,
+        };
+        turnRecords.push(rec);
+        if (rec.first_token_ms != null) firstMsList.push(rec.first_token_ms);
+        if (rec.tokens_out && rec.total_ms) tpsList.push(rec.tokens_out / (rec.total_ms / 1000));
+        setRow(idx, { turns: `${done}/${total}` });
+      }
+      out.entries.push({
+        npc: npcId, id: entry.id, kind: entry.kind,
+        temperature, max_tokens,
+        turns: turnRecords,
+      });
+    }
+
+    out.finished_at = new Date().toISOString();
+    const avgFirst = firstMsList.length ? Math.round(firstMsList.reduce((a, b) => a + b, 0) / firstMsList.length) : null;
+    const avgTps = tpsList.length ? (tpsList.reduce((a, b) => a + b, 0) / tpsList.length).toFixed(2) : null;
+
+    const json = JSON.stringify(out, null, 2);
+    $raw.value = json;
+    const blob = new Blob([json], { type: 'application/json' });
+    const blobUrl = URL.createObjectURL(blob);
+    const slug = modelId.replace(/[^A-Za-z0-9.-]+/g, '_');
+    setRow(idx, {
+      state: 'done',
+      firstms: avgFirst ?? '',
+      tps: avgTps ?? '',
+      downloadBlobUrl: blobUrl,
+      downloadName: `results-${slug}.json`,
+    });
+
+    // best-effort teardown so the next model can claim WebGPU memory
+    try {
+      if (typeof engine.unload === 'function') {
+        await engine.unload();
+      }
+    } catch (err) {
+      console.warn('engine.unload threw', err);
+    }
+    return { ok: true };
+  }
+
+  async function runChain() {
+    $run.disabled = true;
+    setStatus('loading spec + personas…');
+    const [spec, edda, finn] = await Promise.all([
+      fetchJson('./smoke-prompts.json'),
+      fetchJson('../npcs/edda.json'),
+      fetchJson('../npcs/finn.json'),
+    ]);
+    const npcMap = { edda, finn };
+
+    for (let i = 0; i < MODELS.length; i++) {
+      await runOneModel(MODELS[i], spec, npcMap, i);
+    }
+    setStatus(`chain complete — click each Download to save results-*.json`, 'ready');
+    $run.disabled = false;
+  }
+
+  $run.addEventListener('click', () => {
+    runChain().catch(err => {
+      console.error(err);
+      setStatus(`fatal: ${err.message || err}`, 'error');
+      $run.disabled = false;
+    });
+  });
+</script>
+</body>
+</html>
