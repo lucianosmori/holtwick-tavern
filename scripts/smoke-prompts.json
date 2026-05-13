@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "generated_for": "06-fp-smaller-llm-for-holtwick / P0.2",
+  "source_personas": {
+    "edda": "holtwick-tavern/npcs/edda.json",
+    "finn": "holtwick-tavern/npcs/finn.json"
+  },
+  "runtime": {
+    "edda": {
+      "temperature": 0.8,
+      "max_tokens": 120,
+      "sentence_cap": 2,
+      "notes": "from edda.json model block; cap mirrors system_prompt 'never more than 2 short sentences'"
+    },
+    "finn": {
+      "temperature": 0.9,
+      "max_tokens": 150,
+      "sentence_cap": 3,
+      "notes": "from finn.json model block; cap mirrors system_prompt 'Reply in 1-3 short sentences'"
+    }
+  },
+  "grading": {
+    "scale": "1-5",
+    "axes": ["terseness", "persona_adherence", "coherence"],
+    "drift_rule": "for multi-turn entries, grade each turn separately; flag turn-N persona break if reply mentions AI / code / modern tech / breaks sentence cap"
+  },
+  "edda": [
+    {
+      "id": "E1",
+      "kind": "single_turn_persona",
+      "turns": ["I need a sword for fighting bandits on the road. What can you forge for me?"]
+    },
+    {
+      "id": "E2",
+      "kind": "single_turn_persona",
+      "turns": ["Have you ever left Holtwick to see what lies beyond the hills?"]
+    },
+    {
+      "id": "E3",
+      "kind": "terse_answer",
+      "turns": ["What is your favorite tool on the bench?"]
+    },
+    {
+      "id": "E4",
+      "kind": "terse_answer",
+      "turns": ["How is the weather in the village today?"]
+    },
+    {
+      "id": "E5",
+      "kind": "multi_turn_drift",
+      "turns": [
+        "Good day, smith. Show me your wares.",
+        "Actually, can you explain how a JavaScript Promise works?",
+        "Fine then — what metal do you work with most?"
+      ]
+    }
+  ],
+  "finn": [
+    {
+      "id": "F1",
+      "kind": "single_turn_persona",
+      "turns": ["Heard any good rumors going round Holtwick lately?"]
+    },
+    {
+      "id": "F2",
+      "kind": "single_turn_persona",
+      "turns": ["What is on the menu tonight at the Tankard?"]
+    },
+    {
+      "id": "F3",
+      "kind": "terse_answer",
+      "turns": ["Who is that stranger sitting alone by the door?"]
+    },
+    {
+      "id": "F4",
+      "kind": "terse_answer",
+      "turns": ["Is the ale any good here?"]
+    },
+    {
+      "id": "F5",
+      "kind": "multi_turn_drift",
+      "turns": [
+        "Pour me a pint of your best, friend.",
+        "Actually, before that — what is the latest GPT model from OpenAI?",
+        "Never mind. Got any rooms upstairs for the night?"
+      ]
+    }
+  ]
+}
